@@ -72,10 +72,11 @@ public class Kernel extends Thread {
                 memVector.addElement(new Page(i, -1, R, M, 0, 0, high, low));
             }
             try {
-                DataInputStream in = new DataInputStream(new FileInputStream(f));
-                while ((line = in.readLine()) != null)
+                // Reset clock for page fault algorithm
+                PageFault.clock = new CircularList();
 
-                {
+                DataInputStream in = new DataInputStream(new FileInputStream(f));
+                while ((line = in.readLine()) != null) {
                     if (line.startsWith("memset")) {
                         StringTokenizer st = new StringTokenizer(line);
                         st.nextToken();
@@ -117,6 +118,7 @@ public class Kernel extends Thread {
                             page.M = M;
                             page.inMemTime = inMemTime;
                             page.lastTouchTime = lastTouchTime;
+                            PageFault.clock.insert(page);
                         }
                     }
                     if (line.startsWith("enable_logging")) {
@@ -178,6 +180,9 @@ public class Kernel extends Thread {
                     }
                 }
                 in.close();
+
+                // Start from first page in memory
+                PageFault.clock.modeHandToStart();
             } catch (IOException e) { /* Handle exceptions */ }
         }
         f = new File(commands);
@@ -324,7 +329,7 @@ public class Kernel extends Thread {
         controlPanel.instructionValueLabel.setText(instruct.inst);
         controlPanel.addressValueLabel.setText(Long.toString(instruct.addr, addressradix));
         getPage(Virtual2Physical.pageNum(instruct.addr, virtPageNum, block));
-        if (controlPanel.pageFaultValueLabel.getText() == "YES") {
+        if (controlPanel.pageFaultValueLabel.getText().equals("YES")) {
             controlPanel.pageFaultValueLabel.setText("NO");
         }
         if (instruct.inst.startsWith("READ")) {
@@ -336,7 +341,7 @@ public class Kernel extends Thread {
                 if (doStdoutLog) {
                     System.out.println("READ " + Long.toString(instruct.addr, addressradix) + " ... page fault");
                 }
-                PageFault.replacePage(memVector, virtPageNum, Virtual2Physical.pageNum(instruct.addr, virtPageNum, block), controlPanel);
+                PageFault.replacePageWSClock(memVector, Virtual2Physical.pageNum(instruct.addr, virtPageNum, block), controlPanel);
                 controlPanel.pageFaultValueLabel.setText("YES");
             } else {
                 page.R = 1;
@@ -358,9 +363,10 @@ public class Kernel extends Thread {
                 if (doStdoutLog) {
                     System.out.println("WRITE " + Long.toString(instruct.addr, addressradix) + " ... page fault");
                 }
-                PageFault.replacePage(memVector, virtPageNum, Virtual2Physical.pageNum(instruct.addr, virtPageNum, block), controlPanel);
+                PageFault.replacePageWSClock(memVector, Virtual2Physical.pageNum(instruct.addr, virtPageNum, block), controlPanel);
                 controlPanel.pageFaultValueLabel.setText("YES");
             } else {
+                page.R = 1;
                 page.M = 1;
                 page.lastTouchTime = 0;
                 if (doFileLog) {
