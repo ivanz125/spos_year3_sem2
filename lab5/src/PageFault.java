@@ -32,6 +32,7 @@ public class PageFault {
         while (true) {
             // Move forward
             if (page.R == 1) {
+                page.R = 0;
                 page = clock.moveHand();
             }
             // Check M-bit
@@ -52,16 +53,7 @@ public class PageFault {
                 }
                 // Schedule disk write
                 else {
-                    Page thisPage = page;
-                    new Thread(() -> {
-                        try {
-                            Thread.sleep(new Random().nextInt(20));
-                            thisPage.M = 1;
-
-                        } catch (InterruptedException e) {
-                            e.printStackTrace();
-                        }
-                    }).start();
+                    DiskWrite.getInstance().scheduleWrite(page);
                     page = clock.moveHand();
                 }
             }

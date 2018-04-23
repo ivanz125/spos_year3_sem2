@@ -387,6 +387,7 @@ public class Kernel extends Thread {
                 page.lastTouchTime = page.lastTouchTime + 10;
             }
         }
+        DiskWrite.getInstance().runWrites();
         runs++;
         controlPanel.timeValueLabel.setText(Integer.toString(runs * 10) + " (ns)");
     }

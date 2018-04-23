@@ -24,4 +24,4 @@ READ c93e1 ... page fault
 READ ce201 ... page fault
 READ d3021 ... page fault
 READ d7e41 ... page fault
-WRITE a ... page fault
+WRITE a ... okay
