@@ -586,6 +586,146 @@ public class Kernel {
         return open(fileDescriptor);
     }
 
+    public static int unlink(String path) throws Exception {
+        String fullPath = getFullPath(path);
+        StringBuffer dirname = new StringBuffer("/");
+        FileSystem fileSystem = openFileSystems[ROOT_FILE_SYSTEM];
+        IndexNode currIndexNode = getRootIndexNode();
+        IndexNode prevIndexNode = null;
+        short prevIndexNodeNumber = FileSystem.ROOT_INDEX_NODE_NUMBER;
+        short indexNodeNumber = FileSystem.ROOT_INDEX_NODE_NUMBER;
+
+        // Split fullPath into array of paths.
+        StringTokenizer st = new StringTokenizer(fullPath, "/");
+        // Start at root node.
+        String name = ".";
+        while (st.hasMoreTokens()) {
+            name = st.nextToken();
+
+            if (!name.equals("")) {
+                // Check to see if the current node is a directory.
+                if ((currIndexNode.getMode() & S_IFMT) != S_IFDIR) {
+                    setErrno(ENOTDIR);
+                    return -1;
+                }
+
+                if (st.hasMoreTokens()) {
+                    dirname.append(name);
+                    dirname.append('/');
+                }
+
+                // Get the next index node corresponding to the token.
+                prevIndexNode = currIndexNode;
+                prevIndexNodeNumber = indexNodeNumber;
+                currIndexNode = new IndexNode();
+                indexNodeNumber = findNextIndexNode(fileSystem, prevIndexNode, name, currIndexNode);
+            }
+        }
+
+        // File not found
+        if (indexNodeNumber < 0) {
+            System.err.println("No such file: " + path);
+            setErrno(ENOENT);
+            return -1;
+        }
+
+        // Check if directory
+        if ((currIndexNode.getMode() & S_IFMT) == S_IFDIR) {
+            System.err.println("Unlinking directory is not allowed: " + path);
+            setErrno(EISDIR);
+            return -1;
+        }
+
+        // Open directory to search file and remove it
+        int fd = open(dirname.toString(), O_RDWR);
+        if (fd < 0) {
+            System.err.println("Cannot to open file: " + path);
+            Kernel.exit(EXIT_FAILURE);
+        }
+
+        int status;
+        DirectoryEntry currentDirectoryEntry = new DirectoryEntry();
+        while (true) {
+            // read an entry from the directory
+            status = readdir(fd, currentDirectoryEntry);
+            if (status <= 0) {
+                System.err.println(PROGRAM_NAME + ": error reading directory in unlink");
+                System.exit(EXIT_FAILURE);
+            }
+            // Delete file (reference for block)
+            else if (currentDirectoryEntry.getName().equals(name)) {
+                int seek_status = lseek(fd, -DirectoryEntry.DIRECTORY_ENTRY_SIZE, 1);
+                if (seek_status < 0) {
+                    System.err.println(PROGRAM_NAME + ": error during seek in unlink");
+                    System.exit(EXIT_FAILURE);
+                }
+
+                // Delete directory entry for this file
+                // Check file descriptor.
+                int fileStatus = check_fd_for_write(fd);
+                if (fileStatus >= 0) {
+                    FileDescriptor descriptor = process.openFiles[fd];
+                    int blockSize = descriptor.getBlockSize();
+                    // Clean data in directory entry
+                    currentDirectoryEntry.setIno((short) 0);
+                    int offset = descriptor.getOffset() % blockSize;
+                    for (int i = 0; i < DirectoryEntry.MAX_FILENAME_LENGTH && i < blockSize; i++) {
+                        descriptor.getBytes()[i + offset] = (byte) 0;
+                    }
+                    // Clear data
+                    int in_fd = open(fullPath, O_RDWR);
+                    byte[] b = new byte[currIndexNode.getSize()];
+                    write(in_fd, b, b.length);
+                    // Write changes
+                    fileStatus = descriptor.writeBlock((short) (descriptor.getOffset() / blockSize));
+                    if (fileStatus >= 0) {
+                        descriptor.setOffset(descriptor.getOffset() + DirectoryEntry.DIRECTORY_ENTRY_SIZE);
+                        if (descriptor.getOffset() > descriptor.getSize()) {
+                            descriptor.setSize(descriptor.getOffset());
+                        }
+                    }
+                }
+                break;
+            }
+        }
+        // close the directory
+        close(fd);
+
+        // Decrement nlink and free blocks if nlink = 0
+        if (currIndexNode.getNlink() < 1) {
+            System.out.println("Cannot decrement nlink, it's already 0");
+            return -1;
+        }
+        currIndexNode.setNlink((short) (currIndexNode.getNlink() - 1));
+
+        if (currIndexNode.getNlink() == 0) {
+            int blockSize = fileSystem.getBlockSize();
+            int blocks = (currIndexNode.getSize() + blockSize) / blockSize;
+
+            // free any blocks currently allocated to the file
+            for (int i = 0; i < blocks; i++) {
+                int address = currIndexNode.getBlockAddress(i);
+                if (address != FileSystem.NOT_A_BLOCK) {
+                    fileSystem.freeBlock(address);
+                    currIndexNode.setBlockAddress(i, FileSystem.NOT_A_BLOCK);
+                }
+            }
+
+            // update the inode to size 0
+            currIndexNode.setSize(0);
+
+            // Update index node of parent dir
+            int round = currIndexNode.getSize() / DirectoryEntry.DIRECTORY_ENTRY_SIZE + 1;
+            int size = prevIndexNode.getSize() - (round * DirectoryEntry.DIRECTORY_ENTRY_SIZE);
+            prevIndexNode.setSize(size);
+            fileSystem.writeIndexNode(prevIndexNode, prevIndexNodeNumber);
+        }
+
+        fileSystem.writeIndexNode(currIndexNode, indexNodeNumber);
+
+        return EXIT_SUCCESS;
+    }
+
     /**
      * Terminate the current "process".  Any open files will be closed.
      * <p>
